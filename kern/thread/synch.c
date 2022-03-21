@@ -101,18 +101,6 @@ P(struct semaphore *sem)
 	/* Use the semaphore spinlock to protect the wchan as well. */
 	spinlock_acquire(&sem->sem_lock);
 	while (sem->sem_count == 0) {
-		/*
-		 *
-		 * Note that we don't maintain strict FIFO ordering of
-		 * threads going through the semaphore; that is, we
-		 * might "get" it on the first try even if other
-		 * threads are waiting. Apparently according to some
-		 * textbooks semaphores must for some reason have
-		 * strict ordering. Too bad. :-)
-		 *
-		 * Exercise: how would you implement strict FIFO
-		 * ordering?
-		 */
 		wchan_sleep(sem->sem_wchan, &sem->sem_lock);
 	}
 	KASSERT(sem->sem_count > 0);
@@ -141,70 +129,92 @@ V(struct semaphore *sem)
 struct lock *
 lock_create(const char *name)
 {
-	struct lock *lock;
-
-	lock = kmalloc(sizeof(*lock));
-	if (lock == NULL) {
-		return NULL;
-	}
-
-	lock->lk_name = kstrdup(name);
-	if (lock->lk_name == NULL) {
-		kfree(lock);
-		return NULL;
-	}
-
-	HANGMAN_LOCKABLEINIT(&lock->lk_hangman, lock->lk_name);
-
-	// add stuff here as needed
-
-	return lock;
+   struct lock *lock;
+ 
+   lock = kmalloc(sizeof(*lock));
+   if (lock == NULL) {
+       return NULL;
+   }
+ 
+   lock->lk_name = kstrdup(name);
+   if (lock->lk_name == NULL) {
+       kfree(lock);
+       return NULL;
+   }
+ 
+   HANGMAN_LOCKABLEINIT(&lock->lk_hangman, lock->lk_name);
+ 
+   // add stuff here as needed
+ 
+   lock->lk_wchan = wchan_create(lock->lk_name);
+   if (lock->lk_wchan == NULL) {
+       kfree(lock->lk_name);
+       kfree(lock);
+       return NULL;
+   }
+   lock->acquired = false;
+   spinlock_init(&lock->lk_slock);
+   return lock;
 }
-
+ 
 void
 lock_destroy(struct lock *lock)
 {
-	KASSERT(lock != NULL);
-
-	// add stuff here as needed
-
-	kfree(lock->lk_name);
-	kfree(lock);
+   KASSERT(lock != NULL);
+   KASSERT(!lock->acquired);
+   // add stuff here as needed
+   spinlock_cleanup(&lock->lk_slock);
+   wchan_destroy(lock->lk_wchan);
+   kfree(lock->lk_name);
+   kfree(lock);
 }
-
+ 
 void
 lock_acquire(struct lock *lock)
 {
-	/* Call this (atomically) before waiting for a lock */
-	//HANGMAN_WAIT(&curthread->t_hangman, &lock->lk_hangman);
-
-	// Write this
-
-	(void)lock;  // suppress warning until code gets written
-
-	/* Call this (atomically) once the lock is acquired */
-	//HANGMAN_ACQUIRE(&curthread->t_hangman, &lock->lk_hangman);
+   /* Call this (atomically) before waiting for a lock */
+   //HANGMAN_WAIT(&curthread->t_hangman, &lock->lk_hangman);
+   KASSERT(lock != NULL);
+   spinlock_acquire(&lock->lk_slock);
+   while(lock->acquired)
+   {
+       wchan_sleep(lock->lk_wchan, &lock->lk_slock);
+   }
+   lock->acquired = true;
+   lock->lk_thread = curthread;
+   spinlock_release(&lock->lk_slock);
+   // Write this
+ 
+   (void)lock;  // suppress warning until code gets written
+ 
+   /* Call this (atomically) once the lock is acquired */
+   //HANGMAN_ACQUIRE(&curthread->t_hangman, &lock->lk_hangman);
 }
-
+ 
 void
 lock_release(struct lock *lock)
 {
-	/* Call this (atomically) when the lock is released */
-	//HANGMAN_RELEASE(&curthread->t_hangman, &lock->lk_hangman);
-
-	// Write this
-
-	(void)lock;  // suppress warning until code gets written
+   KASSERT(lock != NULL);
+   KASSERT(lock_do_i_hold(lock));
+   spinlock_acquire(&lock->lk_slock);
+   lock->acquired = false;
+   lock->lk_thread = NULL;
+   wchan_wakeone(lock->lk_wchan, &lock->lk_slock);
+   spinlock_release(&lock->lk_slock);
+   /* Call this (atomically) when the lock is released */
+   //HANGMAN_RELEASE(&curthread->t_hangman, &lock->lk_hangman);
+  
+   // Write this
+ 
+// suppress warning until code gets written
 }
-
+ 
 bool
 lock_do_i_hold(struct lock *lock)
 {
-	// Write this
-
-	(void)lock;  // suppress warning until code gets written
-
-	return true; // dummy until code gets written
+   KASSERT(lock != NULL);
+   return (lock->acquired) && (lock->lk_thread == curthread);
+  
 }
 
 ////////////////////////////////////////////////////////////
